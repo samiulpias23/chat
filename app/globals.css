@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+:root {
+  --viewport-height: 100dvh;
+  --viewport-offset: 0px;
+}
+
+body {
+  background-color: #0e1621;
+  color: #ffffff;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  min-height: 100dvh;
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Telegram Scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #242f3d;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #5288c1;
+}
+
+/* 5-second countdown progress bar for auto-dismissing notifications */
+@keyframes shrinkBar {
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0%;
+  }
+}
+
+.animate-shrink-5s {
+  animation: shrinkBar 5s linear forwards;
+}
