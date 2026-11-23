@@ -359,6 +359,9 @@ export interface MessageContentPayload {
   text?: string;
   fileNames?: string[];
   gifUrl?: string;
+  gifW?: number;
+  gifH?: number;
+  replyTo?: { id: string; name: string; text: string };
 }
 
 export async function encryptMessagePayload(

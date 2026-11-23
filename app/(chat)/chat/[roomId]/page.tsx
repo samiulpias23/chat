@@ -1,19 +1,23 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams } from 'next/navigation';
-import { Loader2, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { ChevronDown, Loader2, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { useAfkLock } from '@/hooks/useAfkLock';
 import { useRealtimeChat } from '@/hooks/useRealtimeChat';
 import { useRoomReadReceipt } from '@/hooks/useRoomReadReceipt';
+import { useRoomPresence } from '@/hooks/useRoomPresence';
+import { useReactions } from '@/hooks/useReactions';
 import { useViewportHeight } from '@/hooks/useViewportHeight';
 import { ChatHeader } from '@/components/chat/ChatHeader';
 import { RoomLockScreen } from '@/components/chat/RoomLockScreen';
 import { RoomSettingsModal } from '@/components/chat/RoomSettingsModal';
 import { MessageBubble } from '@/components/chat/MessageBubble';
 import { MessageComposer } from '@/components/chat/MessageComposer';
+import { PresenceDock } from '@/components/chat/PresenceDock';
+import { RawGalleryModal, type GalleryItem } from '@/components/chat/RawGalleryModal';
 import { toShortUserId } from '@/lib/crypto';
 
 interface RoomMeta {
@@ -22,6 +26,16 @@ interface RoomMeta {
   status: string;
   expires_at: string | null;
   owner_id?: string;
+}
+
+function formatDayLabel(iso: string): string {
+  const d = new Date(iso);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return 'Today';
+  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return d.toLocaleDateString([], { day: 'numeric', month: 'short', year: d.getFullYear() === today.getFullYear() ? undefined : 'numeric' });
 }
 
 export default function ChatRoomPage() {
@@ -35,27 +49,9 @@ export default function ChatRoomPage() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [membersMap, setMembersMap] = useState<Record<string, { name: string; role?: string }>>({});
 
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
-  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
-
-  // Reliable scroll-to-bottom helper that works with keyboard resizing
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
-    if (scrollContainerRef.current) {
-      const container = scrollContainerRef.current;
-      if (behavior === 'auto') {
-        container.scrollTop = container.scrollHeight;
-      } else {
-        container.scrollTo({
-          top: container.scrollHeight,
-          behavior: 'smooth',
-        });
-      }
-    }
-    messagesEndRef.current?.scrollIntoView({ behavior, block: 'end' });
-  }, []);
-
-  // Android Chrome virtual viewport keyboard height adjuster
-  useViewportHeight();
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  const [showJump, setShowJump] = useState(false);
+  const stickRef = useRef(true);
 
   // AFK & Instant Background Lock Hook
   const {
@@ -74,45 +70,87 @@ export default function ChatRoomPage() {
     !isLocked && !!rmkRef.current
   );
 
+  // Who is on screen and who is typing (channel is removed on lock, so locked members disappear at once)
+  const { online, typing, notifyTyping, stopTyping } = useRoomPresence(roomId, user?.id, !isLocked && !!rmkRef.current);
+  const presenceNames = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const id of online) out[id] = membersMap[id]?.name || `User_${toShortUserId(id)}`;
+    return out;
+  }, [online, membersMap]);
+
+  const { reactions, toggle: toggleReaction } = useReactions(roomId, user?.id, !isLocked && !!rmkRef.current);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [replyTo, setReplyTo] = useState<{ id: string; name: string; text: string } | null>(null);
+  const handleSelect = useCallback((id: string) => setSelectedId((p) => (p === id ? null : id)), []);
+  const handleReply = useCallback((t: { id: string; name: string; text: string }) => setReplyTo(t), []);
+  const clearReply = useCallback(() => setReplyTo(null), []);
+
+  // Locking wipes plaintext held in UI state (reply quote, open viewer, selection)
+  useEffect(() => {
+    if (isLocked) {
+      setReplyTo(null);
+      setSelectedId(null);
+      setViewer(null);
+    }
+  }, [isLocked]);
+
+  // Every live photo in the room, oldest first, so the viewer can swipe across messages
+  const galleryItems = useMemo<GalleryItem[]>(() => {
+    const out: GalleryItem[] = [];
+    for (const m of messages) {
+      if (m.media_deleted || m.media_count < 1 || (m.media_type !== 'photo' && m.media_type !== 'album')) continue;
+      for (let i = 0; i < m.media_count; i++) out.push({ messageId: m.id, index: i, count: m.media_count });
+    }
+    return out;
+  }, [messages]);
+  const [viewer, setViewer] = useState<{ messageId: string; index: number } | null>(null);
+  const closeViewer = useCallback(() => setViewer(null), []);
+  const openImage = useCallback((messageId: string, index: number) => setViewer({ messageId, index }), []);
+
   // Read Receipt trigger (starts 24h countdown once all active members read)
   useRoomReadReceipt(roomId, !isLocked, messages.length);
 
-  // Scroll to bottom on initial message load
+  // Fit the fixed shell to the visual viewport only while the chat itself is on screen
+  useViewportHeight(!isLocked && !!room);
+
+  const snapToBottom = useCallback(() => {
+    if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
+  }, [scrollEl]);
+
+  // Stay pinned to the bottom (instantly, no animation) whenever the list or its viewport changes size:
+  // keyboard open/close, composer growing, images/decrypted bubbles loading, new messages.
   useEffect(() => {
-    if (!isLoadingMessages && messages.length > 0) {
-      scrollToBottom('auto');
-    }
-  }, [isLoadingMessages, scrollToBottom]);
+    if (!scrollEl) return;
+    const ro = new ResizeObserver(() => {
+      if (stickRef.current) snapToBottom();
+    });
+    ro.observe(scrollEl);
+    if (scrollEl.firstElementChild) ro.observe(scrollEl.firstElementChild);
+    return () => ro.disconnect();
+  }, [scrollEl, snapToBottom]);
 
-  // Auto-scroll to bottom on new message
+  // New message: follow it if we're at the bottom or we sent it
   useEffect(() => {
-    scrollToBottom('smooth');
-  }, [messages.length, scrollToBottom]);
+    const last = messages[messages.length - 1];
+    if (last && last.sender_id === user?.id) stickRef.current = true;
+    if (stickRef.current) snapToBottom();
+  }, [messages, user?.id, snapToBottom]);
 
-  // Auto-scroll when mobile virtual keyboard opens/resizes visual viewport
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.visualViewport) return;
-    const vv = window.visualViewport;
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    stickRef.current = nearBottom;
+    setShowJump((prev) => (prev === !nearBottom ? prev : !nearBottom));
+  }, []);
 
-    const handleViewportChange = () => {
-      scrollToBottom('smooth');
-    };
-
-    vv.addEventListener('resize', handleViewportChange);
-    vv.addEventListener('scroll', handleViewportChange);
-
-    return () => {
-      vv.removeEventListener('resize', handleViewportChange);
-      vv.removeEventListener('scroll', handleViewportChange);
-    };
-  }, [scrollToBottom]);
+  const jumpToLatest = useCallback(() => {
+    stickRef.current = true;
+    scrollEl?.scrollTo({ top: scrollEl.scrollHeight, behavior: 'smooth' });
+  }, [scrollEl]);
 
   const handleFocusInput = useCallback(() => {
-    scrollToBottom('smooth');
-    setTimeout(() => scrollToBottom('smooth'), 80);
-    setTimeout(() => scrollToBottom('smooth'), 200);
-    setTimeout(() => scrollToBottom('smooth'), 350);
-  }, [scrollToBottom]);
+    stickRef.current = true;
+  }, []);
 
   // Load room members to display sender names and roles
   useEffect(() => {
@@ -209,8 +247,8 @@ export default function ChatRoomPage() {
 
   return (
     <div
-      style={{ height: 'var(--viewport-height, 100dvh)' }}
-      className="fixed inset-0 flex flex-col bg-[#0E1621] text-white overflow-hidden"
+      style={{ top: 'var(--viewport-offset, 0px)', height: 'var(--viewport-height, 100dvh)' }}
+      className="fixed inset-x-0 flex flex-col bg-[#0E1621] text-white overflow-hidden"
     >
       {/* Header */}
       <ChatHeader
@@ -220,8 +258,14 @@ export default function ChatRoomPage() {
       />
 
       {/* Messages Feed: Messages anchored to bottom like Telegram */}
-      <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-3">
-        <div className="flex min-h-full flex-col justify-end pt-3 pb-6 space-y-2.5">
+      <div className="relative flex-1 min-h-0">
+      <div
+        ref={setScrollEl}
+        onScroll={handleScroll}
+        onClick={() => setSelectedId(null)}
+        className="chat-scroll h-full overflow-y-auto overscroll-contain px-3"
+      >
+        <div className={`flex min-h-full flex-col justify-end pt-3 ${online.length > 0 ? 'pb-10' : 'pb-3'}`}>
           {isLoadingMessages ? (
             <div className="flex h-40 items-center justify-center text-[#7E90A3]">
               <Loader2 className="h-5 w-5 animate-spin text-[#5288C1]" />
@@ -237,28 +281,58 @@ export default function ChatRoomPage() {
               </p>
             </div>
           ) : (
-            messages.map((m) => {
+            messages.map((m, i) => {
+              const prev = messages[i - 1];
               const member = membersMap[m.sender_id];
-              const isMe = m.sender_id === user?.id;
-              const rawName = member?.name || `User_${toShortUserId(m.sender_id)}`;
-              const senderName = isMe ? `${rawName} (You)` : rawName;
+              const senderName = member?.name || `User_${toShortUserId(m.sender_id)}`;
               const senderRole = member?.role;
+              const day = new Date(m.created_at).toDateString();
+              const newDay = !prev || new Date(prev.created_at).toDateString() !== day;
+              const groupStart =
+                newDay ||
+                prev.sender_id !== m.sender_id ||
+                new Date(m.created_at).getTime() - new Date(prev.created_at).getTime() > 5 * 60 * 1000;
 
               return (
-                <MessageBubble
-                  key={m.id}
-                  message={m}
-                  currentUserId={user?.id || ''}
-                  senderName={senderName}
-                  senderRole={senderRole}
-                  rmk={rmkRef.current!}
-                  lockGeneration={lockGeneration}
-                />
+                <div key={m.id} className="contents">
+                  {newDay && (
+                    <div className="my-3 flex justify-center">
+                      <span className="rounded-full bg-[#17212B]/90 px-3 py-0.5 text-[11px] font-medium text-[#7E90A3]">
+                        {formatDayLabel(m.created_at)}
+                      </span>
+                    </div>
+                  )}
+                  <MessageBubble
+                    message={m}
+                    currentUserId={user?.id || ''}
+                    senderName={senderName}
+                    senderRole={senderRole}
+                    isGroupStart={groupStart}
+                    rmk={rmkRef.current!}
+                    lockGeneration={lockGeneration}
+                    onOpenImage={openImage}
+                    selected={selectedId === m.id}
+                    onSelect={handleSelect}
+                    reactions={reactions[m.id]}
+                    onReact={toggleReaction}
+                    onReply={handleReply}
+                  />
+                </div>
               );
             })
           )}
-          <div ref={messagesEndRef} />
         </div>
+      </div>
+      {showJump && (
+        <button
+          type="button"
+          onClick={jumpToLatest}
+          aria-label="Jump to latest message"
+          className="absolute bottom-3 right-3 flex h-10 w-10 items-center justify-center rounded-full border border-[#242F3D] bg-[#17212B] text-[#5288C1] shadow-lg active:scale-95"
+        >
+          <ChevronDown className="h-5 w-5" />
+        </button>
+      )}
       </div>
 
       {/* Message Composer */}
@@ -270,11 +344,22 @@ export default function ChatRoomPage() {
           onSuspendPicker={suspendForPicker}
           onResumePicker={resumeFromPicker}
           onFocusInput={handleFocusInput}
-          onExpandChange={() => {
-            setTimeout(() => {
-              scrollToBottom('smooth');
-            }, 60);
-          }}
+          onTyping={notifyTyping}
+          onStopTyping={stopTyping}
+          replyTo={replyTo}
+          onCancelReply={clearReply}
+          dock={<PresenceDock online={online} typing={typing} names={presenceNames} />}
+        />
+      )}
+
+      {viewer && rmkRef.current && (
+        <RawGalleryModal
+          roomId={room.id}
+          items={galleryItems}
+          startMessageId={viewer.messageId}
+          startIndex={viewer.index}
+          rmk={rmkRef.current}
+          onClose={closeViewer}
         />
       )}
 

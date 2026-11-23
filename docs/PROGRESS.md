@@ -12,7 +12,7 @@ Status Legend:
 - [x] Verify Supabase tables, RLS policies, stored procedures, and `chat-media` storage bucket
 - [x] Seed admin account `admin@chataf.com` with `app_metadata.role = 'admin'`
 - [x] Implement Supabase client libraries (`lib/supabase/client.ts`, `server.ts`, `admin.ts`)
-- [ ] **Blocker (dashboard):** enable Supabase → Authentication → Sign In / Providers → "Allow anonymous sign-ins" (currently disabled; app shows a red banner until fixed)
+- [ ] **Blocker (dashboard):** enable Supabase → Authentication → Sign In / Providers → "Allow anonymous sign-ins" (required; the app shows a red banner if it is off, and there is no server-side guest fallback)
 - [x] Implement silent Anonymous Auth bootstrap (`signInAnonymously`) & initial profile auto-creation (`components/auth/AuthProvider.tsx`)
 - [x] Run automated RLS acceptance tests on live Supabase (`scripts/test-rls.mjs`: 12/12 passed)
 
@@ -59,4 +59,9 @@ Status Legend:
 - [x] Implement BSC BEP20 $1/month payment page with lowercase-hex TxID submission (`submit_order` RPC)
 - [x] Build `/admin/login` and `/admin` dashboard gated server-side by `app_metadata.role === 'admin'`
 - [x] Implement `/api/cron/cleanup` route (`CRON_SECRET` bearer auth, `list_purgeable_media` $\rightarrow$ Storage `remove()` $\rightarrow$ `purge_db` RPC)
+- [x] Forgot room password: owner-email OTP, then new password and new key (`/api/rooms/forgot-password`, `/api/rooms/reset-password`, `reset_room_password_by_owner`)
+- [ ] **Blocker (live DB + dashboard):** run `node scripts/migrate-reset-password.mjs`, and add `{{ .Token }}` to the Supabase Magic Link email template (Authentication → Emails)
+- [x] Presence heads + typing dots (`hooks/useRoomPresence.ts`, `PresenceDock`), swipeable multi-photo viewer across the whole room (`RawGalleryModal`), message merge/dedupe + expiry prune, sent/read ticks only on own messages
+- [x] Reply-to-message (quote stored inside the ciphertext) and emoji reactions (`message_reactions`, `toggle_reaction`, `hooks/useReactions.ts`)
+- [ ] **Blocker (live DB):** run `node scripts/migrate-reactions.mjs` (reactions do nothing until the table exists)
 - [x] Production build verification (`npm run build`: 10/10 routes compiled with 0 errors)

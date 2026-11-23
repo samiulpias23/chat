@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Send, Plus, Image as ImageIcon, Camera, Smile, Loader2, FileText } from 'lucide-react';
+import { Send, Plus, Image as ImageIcon, Camera, Smile, Loader2, FileText, X } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { encryptMessagePayload, encryptMediaBlob, MessageContentPayload, generateUUID } from '@/lib/crypto';
 import { GiphyPicker } from './GiphyPicker';
@@ -12,8 +12,12 @@ interface MessageComposerProps {
   rmk: CryptoKey;
   onSuspendPicker: () => void;
   onResumePicker: () => void;
-  onExpandChange?: (isExpanded: boolean) => void;
   onFocusInput?: () => void;
+  onTyping?: () => void;
+  onStopTyping?: () => void;
+  dock?: React.ReactNode;
+  replyTo?: { id: string; name: string; text: string } | null;
+  onCancelReply?: () => void;
 }
 
 export function MessageComposer({
@@ -22,9 +26,22 @@ export function MessageComposer({
   rmk,
   onSuspendPicker,
   onResumePicker,
-  onExpandChange,
   onFocusInput,
+  onTyping,
+  onStopTyping,
+  dock,
+  replyTo,
+  onCancelReply,
 }: MessageComposerProps) {
+  const [sendError, setSendError] = useState<string | null>(null);
+  const errorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showError = (msg: string) => {
+    setSendError(msg);
+    if (errorTimer.current) clearTimeout(errorTimer.current);
+    errorTimer.current = setTimeout(() => setSendError(null), 5000);
+  };
+  useEffect(() => () => { if (errorTimer.current) clearTimeout(errorTimer.current); }, []);
+
   const [text, setText] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [showTray, setShowTray] = useState(false);
@@ -43,7 +60,7 @@ export function MessageComposer({
     if (!file || isSending) return;
 
     if (file.size > 26 * 1024 * 1024) {
-      alert('File size exceeds the 26MB free-tier storage cap.');
+      showError('File is larger than the 26 MB limit.');
       return;
     }
 
@@ -68,6 +85,7 @@ export function MessageComposer({
       const payload: MessageContentPayload = {
         fileNames: [file.name],
         text: file.name,
+        ...(replyTo ? { replyTo } : {}),
       };
       const { encryptedContent, iv } = await encryptMessagePayload(rmk, roomId, messageId, payload);
 
@@ -83,8 +101,9 @@ export function MessageComposer({
       });
 
       if (msgErr) throw msgErr;
+      onCancelReply?.();
     } catch (err: any) {
-      alert(err.message || 'File upload failed.');
+      showError(err.message || 'File upload failed.');
     } finally {
       setIsSending(false);
       if (documentInputRef.current) documentInputRef.current.value = '';
@@ -134,8 +153,9 @@ export function MessageComposer({
   };
 
   // Send pure text or GIF message
-  const handleSendMessage = async (payload: MessageContentPayload, mediaType: 'text' | 'gif' = 'text') => {
+  const handleSendMessage = async (basePayload: MessageContentPayload, mediaType: 'text' | 'gif' = 'text') => {
     if (isSending) return;
+    const payload: MessageContentPayload = replyTo ? { ...basePayload, replyTo } : basePayload;
     setIsSending(true);
 
     try {
@@ -157,6 +177,8 @@ export function MessageComposer({
       });
 
       if (error) throw error;
+      onStopTyping?.();
+      onCancelReply?.();
       setText('');
       if (textareaRef.current) {
         textareaRef.current.style.height = '40px';
@@ -164,7 +186,7 @@ export function MessageComposer({
       setShowGiphy(false);
       setShowTray(false);
     } catch (err: any) {
-      alert(err.message || 'Failed to send message.');
+      showError(err.message || 'Could not send. Check your connection and try again.');
     } finally {
       setIsSending(false);
     }
@@ -210,7 +232,7 @@ export function MessageComposer({
       }
 
       // 2. Encrypt message payload referencing filenames
-      const payload: MessageContentPayload = { fileNames };
+      const payload: MessageContentPayload = { fileNames, ...(replyTo ? { replyTo } : {}) };
       const { encryptedContent, iv } = await encryptMessagePayload(rmk, roomId, messageId, payload);
 
       // 3. Insert message row
@@ -225,8 +247,9 @@ export function MessageComposer({
       });
 
       if (msgErr) throw msgErr;
+      onCancelReply?.();
     } catch (err: any) {
-      alert(err.message || 'Media upload failed.');
+      showError(err.message || 'Media upload failed.');
     } finally {
       setIsSending(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -261,6 +284,8 @@ export function MessageComposer({
 
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setText(e.target.value);
+    if (e.target.value.trim()) onTyping?.();
+    else onStopTyping?.();
     const target = e.target;
     target.style.height = 'auto';
     target.style.height = `${Math.min(target.scrollHeight, 128)}px`;
@@ -282,16 +307,34 @@ export function MessageComposer({
 
   const handleBlur = () => {
     setIsFocused(false);
+    onStopTyping?.();
   };
 
   return (
-    <div
-      className={`shrink-0 w-full z-20 bg-[#17212B] border-t border-[#242F3D]/60 transition-all duration-150 ${
-        isFocused
-          ? 'pt-2 pb-2 px-3'
-          : 'pt-2.5 pb-6 sm:pb-4 px-3 pb-[max(1.75rem,env(safe-area-inset-bottom,1.75rem))]'
-      }`}
-    >
+    <div className="relative shrink-0 w-full z-20 bg-[#17212B] border-t border-[#242F3D]/60 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+      {dock}
+      {sendError && (
+        <p role="alert" className="mb-2 rounded-xl bg-red-950/70 px-3 py-1.5 text-xs text-red-200">
+          {sendError}
+        </p>
+      )}
+      {replyTo && (
+        <div className="mb-2 flex items-center gap-2 rounded-xl border-l-2 border-[#5288C1] bg-[#242F3D] py-1.5 pl-3 pr-1.5">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[11px] font-semibold text-[#5288C1]">Replying to {replyTo.name}</p>
+            <p className="truncate text-xs text-[#B8C4D0]">{replyTo.text}</p>
+          </div>
+          <button
+            type="button"
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={onCancelReply}
+            aria-label="Cancel reply"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[#7E90A3] hover:text-white"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
       {/* Hidden file inputs */}
       <input
         ref={fileInputRef}
@@ -320,8 +363,9 @@ export function MessageComposer({
       {showGiphy && (
         <div className="mb-2">
           <GiphyPicker
-            onSelect={(url) => handleSendMessage({ gifUrl: url }, 'gif')}
+            onSelect={(g) => handleSendMessage({ gifUrl: g.url, gifW: g.width, gifH: g.height }, 'gif')}
             onClose={() => setShowGiphy(false)}
+            disabled={isSending}
           />
         </div>
       )}
@@ -410,14 +454,14 @@ export function MessageComposer({
           onBlur={handleBlur}
           placeholder="Message..."
           rows={1}
-          disabled={isSending}
+          readOnly={isSending}
           autoComplete="off"
           autoCorrect="on"
           autoCapitalize="sentences"
           spellCheck={true}
           enterKeyHint="send"
           style={{ minHeight: '40px' }}
-          className="flex-1 resize-none rounded-2xl bg-[#242F3D] px-4 py-2.5 text-xs text-white placeholder-[#7E90A3] outline-none border-0 focus:outline-none focus:ring-0 focus:border-0 max-h-32 leading-relaxed"
+          className="flex-1 resize-none rounded-2xl bg-[#242F3D] px-4 py-[9px] text-base text-white placeholder-[#7E90A3] outline-none border-0 focus:outline-none focus:ring-0 focus:border-0 max-h-32 leading-snug"
         />
 
         <button

@@ -43,43 +43,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const { data: { session } } = await supabase.auth.getSession();
         let currentUser: User | null = session?.user ?? null;
 
-        // Attempt silent guest session initialization on first visit if no session exists
         if (!currentUser) {
-          try {
-            // 1. Try native anonymous sign-in if enabled
-            const { data: anonData, error: anonErr } = await supabase.auth.signInAnonymously();
-            if (!anonErr && anonData.user) {
-              currentUser = anonData.user;
-            } else {
-              // 2. Seamlessly issue an auto-confirmed guest account
-              const res = await fetch('/api/auth/guest', { method: 'POST' });
-              if (res.ok) {
-                const guestData = await res.json();
-                if (guestData.email && guestData.password) {
-                  const { data: signinData } = await supabase.auth.signInWithPassword({
-                    email: guestData.email,
-                    password: guestData.password,
-                  });
-                  if (signinData?.user) {
-                    currentUser = signinData.user;
-                  }
-                }
-              }
-            }
-          } catch (e) {
-            console.error('Silent guest session error:', e);
+          const { data: anonData, error: anonErr } = await supabase.auth.signInAnonymously();
+          if (anonErr) {
+            setAuthError(
+              /disabled/i.test(anonErr.message)
+                ? 'Guest sign-in is turned off for this app. Enable "Allow anonymous sign-ins" in Supabase Auth settings.'
+                : 'Could not start a session. Check your connection and reload.'
+            );
+          } else {
+            currentUser = anonData.user;
           }
         }
 
         if (currentUser) {
           setUser(currentUser);
-          const isGuest = Boolean(
-            currentUser.is_anonymous ||
-            currentUser.app_metadata?.is_guest ||
-            currentUser.user_metadata?.is_guest ||
-            currentUser.email?.endsWith('@guest.chataf.internal')
-          );
-          setIsAnonymous(isGuest);
+          setIsAnonymous(Boolean(currentUser.is_anonymous));
 
           // Check or create profile
           const { data: profile } = await supabase
@@ -116,8 +95,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) {
         setUser(session.user);
-        const isRealUser = Boolean(session.user.email && !session.user.is_anonymous && !session.user.app_metadata?.is_guest);
-        setIsAnonymous(!isRealUser);
+        setIsAnonymous(Boolean(session.user.is_anonymous));
       } else {
         setUser(null);
         setIsAnonymous(true);
@@ -146,25 +124,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signInWithEmail = async (email: string, pass: string) => {
     const supabase = createClient();
-    let { data, error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password: pass,
     });
-
-    // If unconfirmed error occurs, auto-confirm via API and retry
-    if (error && error.message?.toLowerCase().includes('confirm')) {
-      await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), password: pass }),
-      });
-      const retry = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password: pass,
-      });
-      data = retry.data;
-      error = retry.error;
-    }
 
     if (!error && data.session && data.user) {
       setUser(data.user);
@@ -175,32 +138,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signUpWithEmail = async (email: string, pass: string) => {
     try {
-      // 1. Register with auto-confirmation on server
-      const res = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), password: pass }),
-      });
-      const result = await res.json();
-      if (!res.ok || result.error) {
-        return { error: new Error(result.error || 'Registration failed.') };
-      }
-
-      // 2. Immediately sign in to establish active client session and JWT tokens
       const supabase = createClient();
-      const { data, error: signInErr } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password: pass,
-      });
-
-      if (signInErr) {
-        return { error: signInErr };
+      const { data, error } = await supabase.auth.signUp({ email: email.trim(), password: pass });
+      if (error) return { error };
+      // With email confirmation on, there is no session until the user clicks the link.
+      if (!data.session) {
+        return { error: new Error('Check your email to confirm your account, then sign in.') };
       }
-
-      if (data.session && data.user) {
-        setUser(data.user);
-        setIsAnonymous(false);
-      }
+      setUser(data.user);
+      setIsAnonymous(false);
       return { error: null };
     } catch (err: any) {
       return { error: err };

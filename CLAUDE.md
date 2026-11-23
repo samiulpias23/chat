@@ -21,7 +21,9 @@ Keep both in sync; change schema → update plan §4 invariants.
 - Fresh random 12-byte IV for EVERY encrypt (message, blob, key wrap). Never reuse/derive.
 - AAD always set: `roomId|messageId[|slot]`; wrap uses `roomId`. Blob = `iv || ct+tag`.
 - Password change re-wraps the SAME RMK (`rotate_room_password`); it does not revoke prior knowers.
+- Forgot-password (owner email OTP) makes a NEW RMK and expires old messages; never claim history survives it.
 - Unlock ALWAYS goes through `verify_room_password` (server rate limit). No local-only unlock.
+- Reply quotes live inside the ciphertext payload. Reaction emoji are the one plaintext exception (server-visible, fixed allowlist of 6).
 - Never write plaintext (text, media, ObjectURLs) to localStorage/sessionStorage/IDB/cookies.
   IndexedDB may hold **ciphertext only** (egress cache).
 
@@ -42,7 +44,7 @@ Keep both in sync; change schema → update plan §4 invariants.
 - Admin = JWT `app_metadata.role = 'admin'` (never email, never `user_metadata`). RPCs re-check `is_admin()`.
 - Never rate-limit by client-supplied IP. Key on `auth.uid()` + room.
 - New SECURITY DEFINER fn: revoke from public/anon, grant explicitly.
-- Realtime channels are private, topic `room:<uuid>`.
+- Realtime channels are private, topic `room:<uuid>` (messages) and `room:<uuid>:live` (presence/typing; policy reads part 2 of the topic).
 
 ## Storage / media
 - Bucket `chat-media` is private. Path `{roomId}/{messageId}/{raw|thumb}-{n}.enc`.

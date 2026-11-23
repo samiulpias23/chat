@@ -69,6 +69,7 @@ Create: client makes salt+RMK → `setup_room_e2ee`. Join/unlock: `get_room_kdf_
 
 ### 2.3 Password change (rotation)
 - `rotate_room_password` (owner only, needs **old** auth token): new salt, new IV, re-wrap the **same RMK**, new bcrypt. Atomic, row-locked.
+- Forgotten password: `/api/rooms/forgot-password` emails a Supabase OTP to the owner's account email (masked in the response). `/api/rooms/reset-password` verifies it server-side, max 5 wrong codes per user+room per 10 min, then calls `reset_room_password_by_owner` (service_role only). The client makes a **new** RMK, since the old one is unrecoverable, so the RPC expires all existing messages (cron purges the blobs). Needs the Supabase "Magic Link" email template to include `{{ .Token }}`.
 - Consequence (document in UI): this does **not** revoke someone who already knew the old password or captured the RMK. True revocation = new RMK, which makes ≤7-day-old history unreadable. Not built (YAGNI for <50 users); if a member must be removed, create a new room.
 - After rotation other members' next unlock simply needs the new password; their session is unaffected.
 

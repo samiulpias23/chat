@@ -17,6 +17,15 @@ export interface RawMessageRow {
   expires_at: string;
 }
 
+// Merge rows by id (so a realtime insert racing a fetch never duplicates) and keep chronological order.
+function mergeMessages(prev: RawMessageRow[], incoming: RawMessageRow[]): RawMessageRow[] {
+  const byId = new Map(prev.map((m) => [m.id, m]));
+  for (const m of incoming) byId.set(m.id, m);
+  return [...byId.values()].sort(
+    (a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)
+  );
+}
+
 export function useRealtimeChat(roomId: string, isUnlocked: boolean) {
   const [messages, setMessages] = useState<RawMessageRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -33,7 +42,7 @@ export function useRealtimeChat(roomId: string, isUnlocked: boolean) {
         .order('created_at', { ascending: true });
 
       if (!error && data) {
-        setMessages(data as RawMessageRow[]);
+        setMessages((prev) => mergeMessages(prev, data as RawMessageRow[]));
       }
     } catch (err) {
       console.error('Failed to fetch messages:', err);
@@ -64,7 +73,7 @@ export function useRealtimeChat(roomId: string, isUnlocked: boolean) {
           filter: `room_id=eq.${roomId}`,
         },
         (payload) => {
-          setMessages((prev) => [...prev, payload.new as RawMessageRow]);
+          setMessages((prev) => mergeMessages(prev, [payload.new as RawMessageRow]));
         }
       )
       .on(
@@ -81,9 +90,22 @@ export function useRealtimeChat(roomId: string, isUnlocked: boolean) {
           );
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        // Anything inserted between the first fetch and the subscription going live is picked up here
+        if (status === 'SUBSCRIBED') fetchMessages();
+      });
+
+    // Drop messages whose 24h-after-read / 7d lifetime has passed without waiting for the daily cron
+    const prune = setInterval(() => {
+      const now = Date.now();
+      setMessages((prev) => {
+        const next = prev.filter((m) => new Date(m.expires_at).getTime() > now);
+        return next.length === prev.length ? prev : next;
+      });
+    }, 30_000);
 
     return () => {
+      clearInterval(prune);
       supabase.removeChannel(channel);
     };
   }, [roomId, isUnlocked, fetchMessages]);

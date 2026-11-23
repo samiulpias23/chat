@@ -5,7 +5,7 @@ import { Download, Check, Loader2, Image as ImageIcon } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { decryptMediaBlob } from '@/lib/crypto';
 import { getCachedCiphertext, setCachedCiphertext } from '@/lib/cipherCache';
-import { RawGalleryModal } from './RawGalleryModal';
+import { objectUrlRegistry } from '@/lib/urlRegistry';
 
 interface MultiImageMosaicProps {
   roomId: string;
@@ -14,6 +14,7 @@ interface MultiImageMosaicProps {
   mediaDeleted: boolean;
   rmk: CryptoKey;
   lockGeneration: number;
+  onOpenImage?: (messageId: string, index: number) => void;
 }
 
 export function MultiImageMosaic({
@@ -23,15 +24,17 @@ export function MultiImageMosaic({
   mediaDeleted,
   rmk,
   lockGeneration,
+  onOpenImage,
 }: MultiImageMosaicProps) {
   const [thumbUrls, setThumbUrls] = useState<Record<number, string>>({});
   const [downloadedSet, setDownloadedSet] = useState<Set<number>>(new Set());
   const [isBatchDownloading, setIsBatchDownloading] = useState(false);
-  const [activeGalleryIndex, setActiveGalleryIndex] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // Fetch and decrypt 160px thumbnails (<15KB) with zero egress on subsequent unlocks
   useEffect(() => {
     let isCancelled = false;
+    const created: string[] = [];
 
     async function loadThumbnails() {
       if (mediaDeleted) return;
@@ -58,7 +61,8 @@ export function MultiImageMosaic({
           if (cipherBuffer && !isCancelled) {
             const decryptedBuffer = await decryptMediaBlob(rmk, roomId, messageId, slot, cipherBuffer);
             const thumbBlob = new Blob([decryptedBuffer], { type: 'image/webp' });
-            urls[i] = URL.createObjectURL(thumbBlob);
+            urls[i] = objectUrlRegistry.create(thumbBlob);
+            created.push(urls[i]);
           }
         } catch (err) {
           console.warn(`Failed to decrypt thumbnail ${i}:`, err);
@@ -74,6 +78,7 @@ export function MultiImageMosaic({
 
     return () => {
       isCancelled = true;
+      created.forEach((u) => objectUrlRegistry.revoke(u));
     };
   }, [roomId, messageId, mediaCount, mediaDeleted, rmk, lockGeneration]);
 
@@ -114,7 +119,8 @@ export function MultiImageMosaic({
         }
       }
     } catch (err: any) {
-      alert(err.message || 'Batch download failed.');
+      setError(err.message || 'Batch download failed.');
+      setTimeout(() => setError(null), 5000);
     } finally {
       setIsBatchDownloading(false);
     }
@@ -170,15 +176,20 @@ export function MultiImageMosaic({
 
       {/* Grid Mosaic */}
       <div
-        className={`grid gap-1.5 overflow-hidden rounded-xl ${
-          mediaCount === 1 ? 'grid-cols-1' : mediaCount === 2 ? 'grid-cols-2' : 'grid-cols-3'
+        style={{ width: 'min(66vw, 260px)' }}
+        className={`grid gap-1 overflow-hidden rounded-xl ${
+          mediaCount === 1 ? 'grid-cols-1' : mediaCount === 2 || mediaCount === 4 ? 'grid-cols-2' : 'grid-cols-3'
         }`}
       >
         {Array.from({ length: mediaCount }).map((_, idx) => (
-          <div
+          <button
+            type="button"
             key={idx}
-            onClick={() => setActiveGalleryIndex(idx)}
-            className="group relative aspect-square cursor-pointer overflow-hidden rounded-lg bg-[#0E1621]"
+            onClick={() => onOpenImage?.(messageId, idx)}
+            aria-label={`Open photo ${idx + 1} of ${mediaCount}`}
+            className={`group relative cursor-pointer overflow-hidden bg-[#0E1621] ${
+              mediaCount === 1 ? 'aspect-[4/3]' : 'aspect-square'
+            }`}
           >
             {thumbUrls[idx] ? (
               // eslint-disable-next-line @next/next/no-img-element
@@ -199,21 +210,12 @@ export function MultiImageMosaic({
                 <Check className="h-3 w-3" />
               </span>
             )}
-          </div>
+          </button>
         ))}
       </div>
 
-      {/* Full-Screen Gallery Modal */}
-      {activeGalleryIndex !== null && (
-        <RawGalleryModal
-          roomId={roomId}
-          messageId={messageId}
-          initialIndex={activeGalleryIndex}
-          totalImages={mediaCount}
-          rmk={rmk}
-          mediaDeleted={mediaDeleted}
-          onClose={() => setActiveGalleryIndex(null)}
-        />
+      {error && (
+        <p role="alert" className="text-[11px] text-red-300">{error}</p>
       )}
     </div>
   );

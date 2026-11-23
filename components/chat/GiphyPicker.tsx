@@ -1,95 +1,160 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Search, Loader2, X } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { Search, Loader2, X, ImageOff } from 'lucide-react';
 
-interface GiphyPickerProps {
-  onSelect: (gifUrl: string) => void;
-  onClose: () => void;
+export interface PickedGif {
+  url: string;
+  width: number;
+  height: number;
 }
 
-export function GiphyPicker({ onSelect, onClose }: GiphyPickerProps) {
+interface GiphyPickerProps {
+  onSelect: (gif: PickedGif) => void;
+  onClose: () => void;
+  disabled?: boolean;
+}
+
+interface GiphyItem {
+  id: string;
+  title: string;
+  preview: PickedGif;
+  send: PickedGif;
+}
+
+function toGif(img: any): PickedGif | null {
+  if (!img?.url) return null;
+  return { url: img.url, width: Number(img.width) || 200, height: Number(img.height) || 200 };
+}
+
+function parseItems(data: any[]): GiphyItem[] {
+  const items: GiphyItem[] = [];
+  for (const g of data) {
+    const preview = toGif(g.images?.fixed_width_small) ?? toGif(g.images?.fixed_width);
+    const send = toGif(g.images?.downsized) ?? toGif(g.images?.fixed_height) ?? preview;
+    if (preview && send) items.push({ id: g.id, title: g.title || 'GIF', preview, send });
+  }
+  return items;
+}
+
+export function GiphyPicker({ onSelect, onClose, disabled = false }: GiphyPickerProps) {
   const [query, setQuery] = useState('');
-  const [gifs, setGifs] = useState<any[]>([]);
+  const [gifs, setGifs] = useState<GiphyItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let isCancelled = false;
+    const controller = new AbortController();
 
     async function loadGifs() {
       setIsLoading(true);
+      setFailed(false);
       try {
-        const url = query.trim()
-          ? `/api/gif/search?q=${encodeURIComponent(query.trim())}`
-          : '/api/gif/search';
-        const res = await fetch(url);
-        if (res.ok) {
-          const data = await res.json();
-          if (!isCancelled && data?.data) {
-            setGifs(data.data);
-          }
-        }
+        const q = query.trim();
+        const res = await fetch(q ? `/api/gif/search?q=${encodeURIComponent(q)}` : '/api/gif/search', {
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error('GIF search failed');
+        const data = await res.json();
+        if (!isCancelled) setGifs(parseItems(data?.data ?? []));
       } catch (err) {
-        console.warn('Failed to load GIFs:', err);
+        if (!isCancelled && (err as Error).name !== 'AbortError') setFailed(true);
       } finally {
         if (!isCancelled) setIsLoading(false);
       }
     }
 
-    const timer = setTimeout(loadGifs, 350);
+    const timer = setTimeout(loadGifs, query ? 350 : 0);
     return () => {
       isCancelled = true;
+      controller.abort();
       clearTimeout(timer);
     };
   }, [query]);
 
+  // Balance two masonry columns by rendered height so tiles keep their real aspect ratio.
+  const columns = useMemo(() => {
+    const cols: GiphyItem[][] = [[], []];
+    const heights = [0, 0];
+    for (const g of gifs) {
+      const i = heights[0] <= heights[1] ? 0 : 1;
+      cols[i].push(g);
+      heights[i] += g.preview.height / g.preview.width;
+    }
+    return cols;
+  }, [gifs]);
+
   return (
-    <div className="flex h-72 flex-col rounded-2xl bg-[#17212B] p-3 shadow-2xl border border-[#242F3D]">
-      {/* Header & Search */}
-      <div className="flex items-center gap-2 pb-2">
+    <div className="flex h-[min(20rem,45dvh)] flex-col overflow-hidden rounded-2xl border border-[#242F3D] bg-[#17212B] shadow-2xl">
+      <div className="flex items-center gap-2 border-b border-[#242F3D]/70 p-2">
         <div className="relative flex-1">
-          <Search className="pointer-events-none absolute left-3 top-2.5 h-3.5 w-3.5 text-[#7E90A3]" />
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7E90A3]" />
           <input
-            type="text"
+            type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search GIPHY..."
-            className="w-full rounded-xl bg-[#242F3D] py-1.5 pl-8 pr-3 text-xs text-white placeholder-[#7E90A3] outline-none transition focus:ring-1 focus:ring-[#5288C1]"
+            placeholder="Search GIFs"
+            aria-label="Search GIFs"
+            enterKeyHint="search"
+            className="h-9 w-full rounded-xl bg-[#242F3D] pl-9 pr-3 text-base text-white placeholder-[#7E90A3] outline-none transition focus:ring-1 focus:ring-[#5288C1]"
           />
         </div>
         <button
+          type="button"
           onClick={onClose}
-          className="flex h-7 w-7 items-center justify-center rounded-lg text-[#7E90A3] hover:text-white"
+          aria-label="Close GIF picker"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[#7E90A3] transition hover:bg-[#242F3D] hover:text-white"
         >
           <X className="h-4 w-4" />
         </button>
       </div>
 
-      {/* GIF Grid */}
-      <div className="flex-1 overflow-y-auto">
-        {isLoading ? (
+      <div className="relative flex-1 overflow-y-auto overscroll-contain p-2">
+        {isLoading && gifs.length === 0 ? (
           <div className="flex h-full items-center justify-center">
             <Loader2 className="h-5 w-5 animate-spin text-[#5288C1]" />
           </div>
+        ) : failed ? (
+          <div className="flex h-full flex-col items-center justify-center gap-1 text-center text-xs text-[#7E90A3]">
+            <ImageOff className="h-5 w-5" />
+            <span>Couldn&apos;t load GIFs. Check your connection.</span>
+          </div>
+        ) : gifs.length === 0 ? (
+          <div className="flex h-full items-center justify-center text-xs text-[#7E90A3]">
+            No GIFs found for &ldquo;{query.trim()}&rdquo;
+          </div>
         ) : (
-          <div className="grid grid-cols-2 gap-2">
-            {gifs.map((g) => {
-              const url = g.images?.fixed_height?.url || g.images?.original?.url;
-              if (!url) return null;
-              return (
-                <div
-                  key={g.id}
-                  onClick={() => onSelect(url)}
-                  className="aspect-video cursor-pointer overflow-hidden rounded-lg bg-[#0E1621] transition hover:opacity-80"
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={url} alt={g.title} className="h-full w-full object-cover" />
-                </div>
-              );
-            })}
+          <div className={`flex gap-1.5 transition-opacity ${isLoading ? 'opacity-50' : ''}`}>
+            {columns.map((col, ci) => (
+              <div key={ci} className="flex min-w-0 flex-1 flex-col gap-1.5">
+                {col.map((g) => (
+                  <button
+                    key={g.id}
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => onSelect(g.send)}
+                    aria-label={g.title}
+                    style={{ aspectRatio: `${g.preview.width} / ${g.preview.height}` }}
+                    className="w-full overflow-hidden rounded-lg bg-[#0E1621] transition active:scale-95 disabled:opacity-50"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={g.preview.url}
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                      className="h-full w-full object-cover"
+                    />
+                  </button>
+                ))}
+              </div>
+            ))}
           </div>
         )}
       </div>
+
+      <p className="border-t border-[#242F3D]/70 py-1 text-center text-[10px] text-[#7E90A3]">Powered by GIPHY</p>
     </div>
   );
 }

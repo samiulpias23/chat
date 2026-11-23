@@ -3,7 +3,10 @@ import { NextResponse } from 'next/server';
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get('q');
-  const apiKey = process.env.GIPHY_API_KEY || 'sXpGFDGZs0Dv1mmNFvYaGUvYwKX0PWIh';
+  const apiKey = process.env.GIPHY_API_KEY;
+  if (!apiKey) {
+    return NextResponse.json({ error: 'GIF search is not configured' }, { status: 503 });
+  }
 
   try {
     const endpoint = query

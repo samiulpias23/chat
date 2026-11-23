@@ -23,6 +23,7 @@ export function FileAttachmentCard({
 }: FileAttachmentCardProps) {
   const [isDownloading, setIsDownloading] = useState(false);
   const [isDone, setIsDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleDownloadFile = async () => {
     if (isDownloading) return;
@@ -60,7 +61,8 @@ export function FileAttachmentCard({
       setIsDone(true);
       setTimeout(() => setIsDone(false), 3000);
     } catch (err: any) {
-      alert(err.message || 'Failed to download and decrypt file.');
+      setError(err.message || 'Failed to download and decrypt file.');
+      setTimeout(() => setError(null), 5000);
     } finally {
       setIsDownloading(false);
     }
@@ -85,7 +87,11 @@ export function FileAttachmentCard({
 
       <div className="min-w-0 flex-1">
         <p className="truncate text-xs font-medium text-white">{fileName}</p>
-        <p className="text-[10px] text-[#7E90A3]">Encrypted Document · Click to download</p>
+        {error ? (
+          <p role="alert" className="text-[10px] text-red-300">{error}</p>
+        ) : (
+          <p className="text-[10px] text-[#7E90A3]">Encrypted Document · Tap to download</p>
+        )}
       </div>
 
       <div className="shrink-0 p-1 text-[#5288C1] hover:text-white">
