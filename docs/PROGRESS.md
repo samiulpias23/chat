@@ -64,4 +64,6 @@ Status Legend:
 - [x] Presence heads + typing dots (`hooks/useRoomPresence.ts`, `PresenceDock`), swipeable multi-photo viewer across the whole room (`RawGalleryModal`), message merge/dedupe + expiry prune, sent/read ticks only on own messages
 - [x] Reply-to-message (quote stored inside the ciphertext) and emoji reactions (`message_reactions`, `toggle_reaction`, `hooks/useReactions.ts`)
 - [ ] **Blocker (live DB):** run `node scripts/migrate-reactions.mjs` (reactions do nothing until the table exists)
+- [x] Opt-in web push (Profile → Allow Notifications): `public/sw.js`, `lib/push.ts`, `/api/push/notify`, `push_subscriptions`
+- [ ] **Blocker (live DB + Vercel):** run `node scripts/migrate-push.mjs`; set `NEXT_PUBLIC_VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` in Vercel and redeploy
 - [x] Production build verification (`npm run build`: 10/10 routes compiled with 0 errors)

@@ -26,6 +26,7 @@ import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { generateSalt, deriveKeysFromPassword, createAndWrapRoomKey, toShortUserId } from '@/lib/crypto';
 import { formatAppDate } from '@/lib/formatDate';
+import { NotificationSettings } from '@/components/profile/NotificationSettings';
 import { getSecuritySettings, saveSecuritySettings, ClientSecuritySettings } from '@/lib/securitySettings';
 
 interface UserOrder {
@@ -346,6 +347,8 @@ function ProfileContent() {
           </div>
         </form>
       </div>
+
+      <NotificationSettings />
 
       {/* CLIENT SECURITY & AUTO-LOCK SETTINGS */}
       <div className="mt-5 rounded-2xl bg-[#17212B] p-5 border border-[#242F3D] space-y-4">

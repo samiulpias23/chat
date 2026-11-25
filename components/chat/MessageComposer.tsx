@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Send, Plus, Image as ImageIcon, Camera, Smile, Loader2, FileText, X } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { encryptMessagePayload, encryptMediaBlob, MessageContentPayload, generateUUID } from '@/lib/crypto';
+import { notifyRoom } from '@/lib/push';
 import { GiphyPicker } from './GiphyPicker';
 
 interface MessageComposerProps {
@@ -101,6 +102,7 @@ export function MessageComposer({
       });
 
       if (msgErr) throw msgErr;
+      notifyRoom(messageId);
       onCancelReply?.();
     } catch (err: any) {
       showError(err.message || 'File upload failed.');
@@ -177,6 +179,7 @@ export function MessageComposer({
       });
 
       if (error) throw error;
+      notifyRoom(messageId);
       onStopTyping?.();
       onCancelReply?.();
       setText('');
@@ -247,6 +250,7 @@ export function MessageComposer({
       });
 
       if (msgErr) throw msgErr;
+      notifyRoom(messageId);
       onCancelReply?.();
     } catch (err: any) {
       showError(err.message || 'Media upload failed.');

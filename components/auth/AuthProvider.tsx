@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/client';
+import { disablePush, syncPush } from '@/lib/push';
 
 interface AuthContextType {
   user: User | null;
@@ -107,6 +108,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  // A device's push subscription follows whichever identity is signed in on it
+  useEffect(() => {
+    if (user?.id) syncPush().catch(() => {});
+  }, [user?.id]);
+
   const updateDisplayName = async (name: string) => {
     if (!user || !name.trim()) return;
     const supabase = createClient();
@@ -155,6 +161,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = async () => {
     const supabase = createClient();
+    await disablePush().catch(() => {});
     await supabase.auth.signOut();
     setUser(null);
     setIsAnonymous(true);

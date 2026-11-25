@@ -11,7 +11,8 @@ Keep both in sync; change schema → update plan §4 invariants.
 
 ## Secrets
 - Never put keys/passwords in code, docs, or commits. Use `.env.local` + Vercel env.
-- `SUPABASE_SECRET_KEY` only in `lib/supabase/admin.ts` (server-only, `import 'server-only'`) for cron.
+- `SUPABASE_SECRET_KEY` only in `lib/supabase/admin.ts` (server-only, `import 'server-only'`), used by server routes.
+- Web push: `VAPID_PRIVATE_KEY` is server-only. Notification text is fixed; never put message, sender or room name in it.
 - `plan.txt` / `supabase_info.txt` hold leaked secrets: do not copy from them; rotate.
 
 ## E2EE invariants (`lib/crypto.ts`)

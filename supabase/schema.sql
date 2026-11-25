@@ -70,8 +70,10 @@ create table if not exists room_members (
   joined_at      timestamptz not null default now(),
   last_active_at timestamptz not null default now(),
   last_read_at   timestamptz not null default now(),
+  unlocked_at    timestamptz, -- first successful password unlock
   primary key (room_id, user_id)
 );
+alter table room_members add column if not exists unlocked_at timestamptz;
 create index if not exists idx_room_members_user on room_members(user_id);
 
 create table if not exists messages (
@@ -335,8 +337,9 @@ begin
     return;
   end if;
 
-  insert into room_members (room_id, user_id) values (p_room_id, v_user)
-  on conflict (room_id, user_id) do update set last_active_at = now();
+  insert into room_members (room_id, user_id, unlocked_at) values (p_room_id, v_user, now())
+  on conflict (room_id, user_id) do update
+    set last_active_at = now(), unlocked_at = coalesce(room_members.unlocked_at, now());
 
   return query select r.kdf_salt, r.wrapped_room_key, r.wrapped_key_iv from rooms r where r.id = p_room_id;
 end $$;
@@ -745,6 +748,60 @@ do $$ begin
   alter publication supabase_realtime add table public.message_reactions;
 exception when duplicate_object then null;
 end $$;
+
+-- ---------- PUSH NOTIFICATIONS -----------------------------------------------
+-- Content-free web push. Subscriptions are never client-readable.
+create table if not exists push_subscriptions (
+  endpoint   text primary key check (length(endpoint) <= 1000 and endpoint ~
+    '^https://(fcm\.googleapis\.com|[a-z0-9.-]+\.push\.services\.mozilla\.com|[a-z0-9.-]+\.push\.apple\.com|[a-z0-9.-]+\.notify\.windows\.com)/'),
+  user_id    uuid not null references auth.users(id) on delete cascade,
+  p256dh     text not null check (length(p256dh) <= 200),
+  auth       text not null check (length(auth) <= 100),
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_push_user on push_subscriptions(user_id);
+alter table push_subscriptions enable row level security;
+revoke all on push_subscriptions from anon, authenticated;
+alter table messages add column if not exists pushed_at timestamptz;
+
+create or replace function public.save_push_subscription(p_endpoint text, p_p256dh text, p_auth text) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then raise exception 'auth required'; end if;
+  insert into push_subscriptions (endpoint, user_id, p256dh, auth) values (p_endpoint, auth.uid(), p_p256dh, p_auth)
+  on conflict (endpoint) do update
+    set user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth, created_at = now();
+  delete from push_subscriptions where user_id = auth.uid() and endpoint not in (
+    select endpoint from push_subscriptions where user_id = auth.uid() order by created_at desc limit 5);
+end $$;
+
+create or replace function public.delete_push_subscription(p_endpoint text) returns void
+language sql security definer set search_path = public as $$
+  delete from push_subscriptions where endpoint = p_endpoint and user_id = auth.uid()
+$$;
+
+-- Claims a message exactly once and returns who to notify: members who unlocked the room with its password.
+create or replace function public.claim_push_targets(p_message_id uuid, p_sender uuid)
+returns table (out_room_id uuid, out_endpoint text, out_p256dh text, out_auth text)
+language plpgsql security definer set search_path = public as $$
+declare v_room uuid;
+begin
+  update messages set pushed_at = now()
+   where id = p_message_id and sender_id = p_sender and pushed_at is null
+     and created_at > now() - interval '2 minutes' and expires_at > now()
+   returning room_id into v_room;
+  if v_room is null or not public.is_room_live(v_room) then return; end if;
+  return query
+    select v_room, s.endpoint, s.p256dh, s.auth
+      from room_members m join push_subscriptions s on s.user_id = m.user_id
+     where m.room_id = v_room and m.user_id <> p_sender and m.role <> 'banned'
+       and (m.unlocked_at is not null or m.role = 'owner');
+end $$;
+
+revoke execute on function public.save_push_subscription(text,text,text), public.delete_push_subscription(text) from public, anon;
+grant  execute on function public.save_push_subscription(text,text,text), public.delete_push_subscription(text) to authenticated;
+revoke execute on function public.claim_push_targets(uuid,uuid) from public, anon, authenticated;
+grant  execute on function public.claim_push_targets(uuid,uuid) to service_role;
 
 -- ---------- REALTIME ---------------------------------------------------------
 do $$ begin

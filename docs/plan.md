@@ -110,6 +110,7 @@ See `supabase/schema.sql`. Invariants to keep when editing it:
 - `tx_hash`: UNIQUE + `^0x[0-9a-f]{64}$`.
 - Admin = JWT `app_metadata.role = 'admin'` (service-role-writable only). Never email string, never `user_metadata`.
 - Anonymous users have role `authenticated` → "TO authenticated" is not an auth boundary; use `can_use_room()`.
+- Web push is content-free (payload = room id). Targets = members who unlocked with the password (`unlocked_at`) or the owner, never the sender; `claim_push_targets` is service-role only and fires once per message. Endpoints are restricted to known push hosts.
 
 ## 5. AFK / background lock (`hooks/useAfkLock.ts`)
 
